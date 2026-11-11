@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>碰數單價</title>
+<!-- 碰數機器人的「填單價」頁：pong_bot.ps1 把碰數放在網址 ?d= 裡（base64 JSON），這頁只在客人手機上計算，不送出任何資料 -->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #ffffff; --card: #f3f4f6; --text: #111827; --muted: #4b5563;
+    --line: #d1d5db; --accent: #1d4ed8; --total-bg: #fef3c7; --total-text: #78350f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111827; --card: #1f2937; --text: #f9fafb; --muted: #d1d5db;
+            --line: #374151; --accent: #93c5fd; --total-bg: #422006; --total-text: #fde68a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+         font: 20px/1.5 -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif; }
+  h2 { font-size: 22px; margin: 20px 0 8px; }
+  .fold summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center;
+                  gap: 8px; flex-wrap: wrap; font-size: 22px; font-weight: 700; padding: 12px 14px; margin: 8px 0 10px;
+                  border: 2px solid var(--line); border-radius: 12px; }
+  .fold summary::-webkit-details-marker { display: none; }
+  .fold summary .hint { font-size: 18px; font-weight: 400; color: var(--accent); }
+  .group { background: var(--card); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+  .group .desc { font-weight: 700; overflow-wrap: anywhere; }
+  .group .play { color: var(--muted); font-size: 18px; }
+  .row { display: grid; grid-template-columns: 3.2em 1fr; align-items: center; column-gap: 12px;
+         padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .row label { font-size: 22px; font-weight: 700; }
+  .row input { width: 100%; min-width: 0; font-size: 26px; padding: 8px 12px; border: 2px solid var(--line);
+               border-radius: 10px; background: var(--bg); color: var(--text); text-align: right; }
+  .row input:focus { outline: none; border-color: var(--accent); }
+  .row .sub { grid-column: 2; font-size: 18px; color: var(--muted); text-align: right; }
+  .row .sub:empty { display: none; }
+  .row.off label, .row.off .sub { opacity: .45; }
+  .row.off input { opacity: .45; }
+  .total { margin-top: 18px; padding: 16px; border-radius: 12px; background: var(--total-bg); color: var(--total-text);
+           font-size: 28px; font-weight: 800; text-align: center; }
+  .detail { margin-top: 12px; font-size: 18px; color: var(--muted); }
+  .err { padding: 24px 0; font-size: 20px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+(function () {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
+  var app = document.getElementById("app");
+
+  function fmt(n) { return (Math.round(n * 100) / 100).toLocaleString("zh-TW"); }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+  // ?d= 是 base64url 的 JSON：[{g:遊戲, d:號碼說明, p:[{l:玩法, n:碰數, z:支數, u:支或車}]}]
+  var groups;
+  try {
+    var d = new URLSearchParams(location.search).get("d").replace(/-/g, "+").replace(/_/g, "/");
+    var bin = atob(d), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    groups = JSON.parse(new TextDecoder().decode(bytes));
+  } catch (e) {
+    app.appendChild(el("div", "err", "找不到單子資料，請回到對話重新按「填單價」。"));
+    return;
+  }
+
+  // 碰數明細：客人可以點標題收起來／打開，記住他上次的選擇
+  var fold = el("details", "fold");
+  var openPref = null;
+  try { openPref = localStorage.getItem("pongDetailOpen"); } catch (e) {}
+  fold.open = openPref !== "0";
+  var sum = el("summary", null, "這張單（" + groups.length + " 組）");
+  sum.appendChild(el("span", "hint", ""));
+  fold.appendChild(sum);
+  function hint() { sum.lastChild.textContent = fold.open ? "點這裡收起來 ▲" : "點這裡看明細 ▼"; }
+  hint();
+  fold.addEventListener("toggle", function () {
+    hint();
+    try { localStorage.setItem("pongDetailOpen", fold.open ? "1" : "0"); } catch (e) {}
+  });
+  app.appendChild(fold);
+  var used = {};   // 遊戲 → { 玩法: true }
+  groups.forEach(function (g, gi) {
+    var box = el("div", "group");
+    box.appendChild(el("div", "desc", (gi + 1) + ". " + g.g + "　" + g.d));
+    g.p.forEach(function (p) {
+      box.appendChild(el("div", "play", p.l + "：" + fmt(p.n) + " 碰 × " + fmt(p.z) + " " + p.u));
+      (used[g.g] = used[g.g] || {})[p.l] = true;
+    });
+    fold.appendChild(box);
+  });
+
+  // 單價格子：每個遊戲都有 車、二星、三星、四星（大樂透有特碼再加特碼）；這張沒用到的反灰
+  var kinds = [["全車", "車"], ["2星", "二星"], ["3星", "三星"], ["4星", "四星"]];
+  // 測試用：網址加 &demo=1 會先填好範例單價
+  var demo = new URLSearchParams(location.search).get("demo") === "1";
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem("pongPrices") || "{}"); } catch (e) {}
+  var inputs = [];
+  Object.keys(used).forEach(function (game) {
+    app.appendChild(el("h2", null, game + " 單價"));
+    var list = kinds.slice();
+    if (used[game]["特碼"]) list.push(["特碼", "特碼"]);
+    list.forEach(function (k) {
+      var on = !!used[game][k[0]];
+      var row = el("div", "row" + (on ? "" : " off"));
+      var lab = el("label", null, k[1]);
+      var inp = el("input");
+      inp.type = "number"; inp.inputMode = "decimal"; inp.min = "0"; inp.step = "any";
+      inp.id = "p_" + game + "_" + k[0]; lab.htmlFor = inp.id;
+      inp.placeholder = on ? "輸入單價" : "這張沒有";
+      inp.disabled = !on;
+      if (on && saved[game + " " + k[0]] != null) inp.value = saved[game + " " + k[0]];
+      if (on && demo && k[0] !== "4星") inp.value = 80;
+      var sub = el("span", "sub", "");
+      row.appendChild(lab); row.appendChild(inp); row.appendChild(sub);
+      app.appendChild(row);
+      if (on) { inputs.push({ game: game, kind: k[0], input: inp, sub: sub }); inp.addEventListener("input", calc); }
+    });
+  });
+
+  var total = el("div", "total", "");
+  var detail = el("div", "detail", "");
+  app.appendChild(total);
+  app.appendChild(detail);
+
+  // 金額 = 單價 × 碰數 × 支數（全車是車數）
+  function calc() {
+    var sum = 0, missing = [], keep = {};
+    inputs.forEach(function (it) {
+      var price = parseFloat(it.input.value);
+      var sub = 0;
+      groups.forEach(function (g) {
+        if (g.g !== it.game) return;
+        g.p.forEach(function (p) { if (p.l === it.kind && price >= 0) sub += price * p.n * p.z; });
+      });
+      if (isNaN(price)) { missing.push(it.game + " " + (it.kind === "全車" ? "車" : it.kind)); it.sub.textContent = ""; }
+      else { keep[it.game + " " + it.kind] = price; it.sub.textContent = fmt(sub) + " 元"; sum += sub; }
+    });
+    try { localStorage.setItem("pongPrices", JSON.stringify(Object.assign(saved, keep))); } catch (e) {}
+    total.textContent = "💰 總金額：" + fmt(sum) + " 元";
+    detail.textContent = missing.length ? "還沒填：" + missing.join("、") : "";
+  }
+  calc();
+})();
+</script>
+</body>
+</html>
